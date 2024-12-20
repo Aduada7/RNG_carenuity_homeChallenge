@@ -1,0 +1,156 @@
+#include <WiFi.h>
+#include <WebServer.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+// OLED display dimensions
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_RESET    -1
+
+// Create the SSD1306 display instance (I2C connection)
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+// Web server on port 80
+WebServer server(80);
+
+// Random number variable
+int randomNumber = 0;
+
+// HTML content for the webpage with input fields for min and max range
+String htmlPage = R"rawliteral(
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Random Number Generator</title>
+    <style>
+      body { font-family: Arial, sans-serif; text-align: center; margin-top: 50px; }
+      button { font-size: 20px; padding: 10px 20px; cursor: pointer; }
+      h1 { font-size: 40px; color: #333; }
+      input { font-size: 18px; padding: 5px; width: 80px; }
+    </style>
+  </head>
+  <body>
+    <h1>Press the button to generate a random number</h1>
+    <p>Min: <input type="number" id="minValue" value="1" /> Max: <input type="number" id="maxValue" value="100" /></p>
+    <button onclick="fetchRandomNumber()">Generate</button>
+    <h2>Random Number: <span id="randomNumber">-</span></h2>
+    <script>
+      function fetchRandomNumber() {
+        // Get values from the input fields
+        var minValue = document.getElementById('minValue').value;
+        var maxValue = document.getElementById('maxValue').value;
+        
+        // Call the ESP32 server to generate a random number
+        fetch(`/generate?min=${minValue}&max=${maxValue}`).then(response => response.text()).then(data => {
+          document.getElementById('randomNumber').innerText = data;
+        });
+      }
+    </script>
+  </body>
+</html>
+)rawliteral";
+
+// Function to handle the root page
+void handleRoot() {
+  server.send(200, "text/html", htmlPage);
+}
+
+// Function to generate a random number based on the provided range
+void handleGenerate() {
+  // Get the 'min' and 'max' values from the query parameters
+  int minVal = server.arg("min").toInt();
+  int maxVal = server.arg("max").toInt();
+
+  // Ensure min is less than max
+  if (minVal >= maxVal) {
+    minVal = 1;
+    maxVal = 100;
+  }
+
+  // Generate a random number between the min and max
+  randomNumber = random(minVal, maxVal + 1); // random(max) is exclusive, so we add 1 to include maxVal
+  displayRandomNumber(randomNumber); // Display on OLED
+  server.send(200, "text/plain", String(randomNumber)); // Send the random number to the web page
+}
+
+// Function to display the random number on the OLED
+void displayRandomNumber(int number) {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(37, 25);
+  display.println("Random");
+  display.setCursor(37, 32);
+  display.println("Number:");  
+  display.setTextSize(2);
+  display.setCursor(37, 45);
+  display.println(String(number));
+  display.display();
+}
+
+void setup() {
+  // Initialize serial communication
+  Serial.begin(9600);
+  delay(500); // Wait for serial to start
+  Serial.println("Serial connection started!");
+
+  // Initialize OLED display
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { // I2C address 0x3C
+    Serial.println("SSD1306 allocation failed");
+    while (1); // Halt if initialization failed
+  }
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(37, 35);
+  display.println("Initializing...");
+  display.display();
+
+  // Access Point Mode Setup
+  WiFi.softAP("ESP32_RandomGen", "12345678");
+  IPAddress IP = WiFi.softAPIP();
+  Serial.println("Access Point started");
+  Serial.println("IP Address: ");
+  Serial.println(IP.toString()); 
+
+  // Display AP information on OLED
+  display.clearDisplay();
+  display.setCursor(35, 26);
+  display.println("Start");
+  display.setCursor(35, 35);
+  display.println("Button:");
+
+  // Get the IP address as a string
+  String ipString = IP.toString();
+
+  // Find the index of the second dot
+  int secondDotIndex = ipString.indexOf('.', ipString.indexOf('.') + 1);
+
+  // Split the IP into two parts: up to the second dot and after
+  String firstPart = ipString.substring(0, secondDotIndex + 1);  // Up to and including the second dot
+  String secondPart = ipString.substring(secondDotIndex + 1);     // After the second dot
+
+  // Print the first part (up to the second dot) on the first line
+  display.setCursor(35, 44);
+  display.println(firstPart);
+
+  // Print the second part (after the second dot) on the next line
+  display.setCursor(35, 52);
+  display.println(secondPart);
+
+  display.display();
+
+  // Set up web server routes
+  server.on("/", handleRoot);       // Serve the HTML page
+  server.on("/generate", handleGenerate); // Handle random number generation
+  server.begin();
+  Serial.println("Web server started");
+
+  // Seed the random number generator
+  randomSeed(analogRead(0));
+}
+
+void loop() {
+  server.handleClient();
+}
